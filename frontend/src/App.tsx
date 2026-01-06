@@ -212,7 +212,7 @@ const App: React.FC = () => {
     };
 
 
-    const handlePushLog = (status: 'Success' | 'Failed', message: string, response?: string) => {
+    const handlePushLog = (status: 'Success' | 'Failed' | 'Processing', message: string, response?: string) => {
         const log: LogEntry = {
             id: uuidv4(),
             timestamp: new Date(),
@@ -581,13 +581,13 @@ const App: React.FC = () => {
 
         // Clear pending states if they matched the deleted file
         if (pendingBankStatementFile && (targetFileEntry.file === pendingBankStatementFile || targetFileEntry.id === (pendingBankStatementFile as any).id || (currentView === AppView.BANK_STATEMENT && targetFileEntry.sourceType === 'BANK_STATEMENT'))) {
-            setPendingBankStatementFile(undefined);
+            setPendingBankStatementFile(null);
         }
-        if (pendingExcelFile && (targetFileEntry.file === pendingExcelFile.file || targetFileEntry.id === pendingExcelFile.id)) setPendingExcelFile(undefined);
+        if (pendingExcelFile && (targetFileEntry.file === pendingExcelFile.file || targetFileEntry.id === pendingExcelFile.id)) setPendingExcelFile(null);
 
         if (currentView === AppView.BANK_STATEMENT && targetFileEntry.sourceType === 'BANK_STATEMENT') {
             // Stay in bank statement view but reset
-            setPendingBankStatementFile(undefined);
+            setPendingBankStatementFile(null);
             // Force refresh by setting View again or just let state update handle it
             // We set explicitly to ensure UI clears
             return;
@@ -619,8 +619,8 @@ const App: React.FC = () => {
         setProcessedFiles([]);
         setCurrentFile(undefined);
         setCurrentInvoice(null);
-        setPendingBankStatementFile(undefined);
-        setPendingExcelFile(undefined);
+        setPendingBankStatementFile(null);
+        setPendingExcelFile(null);
         setToast({ show: true, message: "All files deleted", type: 'success' });
     };
 
@@ -1191,7 +1191,7 @@ const App: React.FC = () => {
                 onWarning={(msg) => setToast({ show: true, message: msg, type: 'warning' })}
                 onRestoreDraft={(data) => {
                     handleSaveInvoice(data, false); setActiveTab('editor'); setCurrentView(AppView.EDITOR);
-                    setToast({ show: true, message: "Draft restored" });
+                    setToast({ show: true, message: "Draft restored", type: 'success' });
                 }}
             />
         );

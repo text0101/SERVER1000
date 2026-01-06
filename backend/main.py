@@ -31,17 +31,17 @@ for path in possible_paths:
         break
 
 if env_path:
-    print(f"✅ Loading .env from: {os.path.abspath(env_path)}")
+    print(f"[SUCCESS] Loading .env from: {os.path.abspath(env_path)}")
     load_dotenv(env_path)
 else:
-    print("⚠️ WARNING: No .env file found! Checking environment variables directly.")
+    print("[WARNING] No .env file found! Checking environment variables directly.")
 
 # Debug Key Loading (Masked)
 key = os.getenv("GEMINI_API_KEY", "")
 if key:
-    print(f"✅ GEMINI_API_KEY Found: {key[:4]}...{key[-4:]} (Length: {len(key)})")
+    print(f"[SUCCESS] GEMINI_API_KEY Found: {key[:4]}...{key[-4:]} (Length: {len(key)})")
 else:
-    print("❌ GEMINI_API_KEY NOT FOUND in environment")
+    print("[ERROR] GEMINI_API_KEY NOT FOUND in environment")
 
 
 app = FastAPI(title="AutoTally Backend API")
@@ -54,7 +54,7 @@ prod_origins = os.getenv("ALLOWED_ORIGINS", "")
 if prod_origins:
     # If production origins are set, use them and remove wildcard (unless explicitly included)
     origins = [origin.strip() for origin in prod_origins.split(",") if origin.strip()]
-    print(f"✅ CORS Allowed Origins: {origins}")
+    print(f"[SUCCESS] CORS Allowed Origins: {origins}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -137,11 +137,11 @@ def track_token_usage(response) -> dict:
             if tokens_used > 0:
                 token_data["used"] += tokens_used
                 save_token_usage(token_data)
-                print(f"📊 Tokens used this request: {tokens_used}, Total: {token_data['used']}/{PLAN_LIMITS.get(token_data['plan'], 100)}")
+                print(f"[TOKEN] Tokens used this request: {tokens_used}, Total: {token_data['used']}/{PLAN_LIMITS.get(token_data['plan'], 100)}")
             else:
-                print(f"📊 No token count in metadata: {metadata}")
+                print(f"[TOKEN] No token count in metadata: {metadata}")
         else:
-            print(f"📊 No usage_metadata in response")
+            print(f"[TOKEN] No usage_metadata in response")
     except Exception as e:
         print(f"Error tracking tokens: {e}")
     
@@ -175,7 +175,7 @@ def check_token_limit() -> dict:
 
 # Initialize token usage on startup
 _token_data = load_token_usage()
-print(f"📊 Token Usage: {_token_data['used']}/{PLAN_LIMITS.get(_token_data['plan'], 100)} ({_token_data['plan']} plan)")
+print(f"[TOKEN] Token Usage: {_token_data['used']}/{PLAN_LIMITS.get(_token_data['plan'], 100)} ({_token_data['plan']} plan)")
 
 
 def validate_api_key(authorization: str = Header(None)):
@@ -761,9 +761,10 @@ Return a clean, structured JSON object suitable for Tally Prime."""
                  output_stream = io.BytesIO()
                  writer.write(output_stream)
                  decrypted_pdf_b64 = base64.b64encode(output_stream.getvalue()).decode('utf-8')
-                 print("✅ PDF Decrypted successfully for Preview")
+                 decrypted_pdf_b64 = base64.b64encode(output_stream.getvalue()).decode('utf-8')
+                 print("[SUCCESS] PDF Decrypted successfully for Preview")
              except Exception as dec_err:
-                 print(f"⚠️ Failed to decrypt PDF for preview: {dec_err}")
+                 print(f"[WARNING] Failed to decrypt PDF for preview: {dec_err}")
 
         # Configure Gemini LATE - only after we have content
         genai.configure(api_key=GEMINI_API_KEY)
@@ -963,14 +964,13 @@ async def process_invoice_pdf(
                     if page_text:
                         extracted_text += page_text + "\n"
         except Exception as e:
-            error_str = str(e).lower()
-            if "password" in error_str or "encrypted" in error_str:
+            error_str = (str(e) + " " + repr(e)).lower()
+            if "password" in error_str or "encrypted" in error_str or "decryption" in error_str:
                 raise HTTPException(status_code=422, detail="Password required")
-            # If generic error (e.g. not a valid PDF or other issue), just log and continue to OCR fallback? 
-            # If password failed, we definitely can't do OCR either as images are also locked.
-            # So simple check:
+            
             print(f"PDFPlumber failed: {e}")
-            if "password" in error_str or "encrypted" in error_str:
+            # Ensure we re-raise if it was definitely a password error
+            if "password" in error_str or "encrypted" in error_str or "decryption" in error_str:
                 raise HTTPException(status_code=422, detail="Password required")
         
         # If no text extracted (scanned PDF), fall back to OCR
@@ -1171,8 +1171,8 @@ async def process_bank_statement_pdf(
                     extracted_text += text + "\n"
     except Exception as e:
         print(f"PDF Text extraction failed: {e}")
-        error_str = str(e).lower()
-        if "password" in error_str or "encrypted" in error_str:
+        error_str = (str(e) + " " + repr(e)).lower()
+        if "password" in error_str or "encrypted" in error_str or "decryption" in error_str:
             raise HTTPException(status_code=422, detail="Password required")
         # Continue to image fallback ONLY if not a password error
     
@@ -1397,6 +1397,58 @@ If it is a bank statement, set "documentType": "BANK_STATEMENT" and extract all 
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process bank statement: {str(e)}")
+
+
+class PlanUpdate(BaseModel):
+    plan: str
+
+class ThresholdUpdate(BaseModel):
+    threshold: int
+
+@app.post("/api/set-plan")
+async def set_plan(
+    update: PlanUpdate,
+    authorization: str = Header(None)
+):
+    """Set the user's plan (Bronze/Gold/Platinum)"""
+    validate_api_key(authorization)
+    
+    if update.plan not in PLAN_LIMITS:
+        raise HTTPException(status_code=400, detail="Invalid plan")
+    
+    token_data = load_token_usage()
+    token_data["plan"] = update.plan
+    save_token_usage(token_data)
+    
+    return {"success": True, "plan": update.plan}
+
+
+@app.post("/api/update-notified-threshold")
+async def update_threshold(
+    update: ThresholdUpdate,
+    authorization: str = Header(None)
+):
+    """Update the last notified threshold"""
+    validate_api_key(authorization)
+    
+    token_data = load_token_usage()
+    token_data["last_notified_threshold"] = update.threshold
+    save_token_usage(token_data)
+    
+    return {"success": True}
+
+
+@app.post("/api/reset-tokens")
+async def reset_tokens(authorization: str = Header(None)):
+    """Reset token usage manually"""
+    validate_api_key(authorization)
+    
+    token_data = load_token_usage()
+    token_data["used"] = 0
+    token_data["last_notified_threshold"] = 0
+    save_token_usage(token_data)
+    
+    return {"success": True}
 
 if __name__ == "__main__":
     import uvicorn

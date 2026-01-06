@@ -81,7 +81,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
             id: item.id && item.id.length > 10 ? item.id : uuidv4()
         }))
     }));
-    const [totals, setTotals] = useState({ taxable: 0, tax: 0, cgst: 0, sgst: 0, igst: 0, grand: 0 });
+    const [totals, setTotals] = useState({ taxable: 0, tax: 0, cgst: 0, sgst: 0, igst: 0, roundOff: 0, grand: 0 });
     const [fileUrl, setFileUrl] = useState<string | null>(null);
     const [draftSaved, setDraftSaved] = useState(false);
 

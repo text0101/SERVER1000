@@ -1,61 +1,44 @@
 {
-  "name": "taxblock-autotally-ai",
-  "private": true,
-  "version": "0.2.5",
-  "description": "AutoTallyAI - Automated Accounting & Tally Integration",
-  "author": "Suraj Suryawanshi",
-  "type": "module",
-  "main": "electron/main.js",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "electron:dev": "concurrently -k \"cross-env NODE_ENV=development vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "vite build && electron-builder",
-    "electron:dist": "vite build && electron-builder --win"
-  },
-  "build": {
-    "appId": "com.autotally.ai",
-    "productName": "AutoTallyAI",
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "TallyAiLogo00.ico"
-    ],
-    "directories": {
-      "output": "release_v23"
+    "name": "taxblock-autotally-ai",
+    "private": true,
+    "version": "0.0.1",
+    "description": "AutoTallyAI - Automated Accounting & Tally Integration",
+    "author": "Suraj Suryawanshi",
+    "type": "module",
+    "main": "electron/main.js",
+    "scripts": {
+        "dev": "cd frontend && npm run dev",
+        "build": "cd frontend && npm run build",
+        "electron:dev": "concurrently -k \"cd frontend && cross-env NODE_ENV=development npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+        "electron:build": "cd frontend && npm run build && cd .. && electron-builder",
+        "electron:dist": "cd frontend && npm run build && cd .. && electron-builder --win",
+        "install:all": "cd frontend && npm install && cd ../backend && pip install -r requirements.txt"
     },
-    "win": {
-      "target": "nsis",
-      "icon": "TallyAiLogo00.ico"
+    "build": {
+        "appId": "com.autotally.ai",
+        "productName": "AutoTallyAI",
+        "files": [
+            "frontend/dist/**/*",
+            "electron/**/*",
+            "TallyAiLogo00.ico"
+        ],
+        "directories": {
+            "output": "release_v24"
+        },
+        "win": {
+            "target": "nsis",
+            "icon": "TallyAiLogo00.ico"
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true
+        }
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+    "devDependencies": {
+        "concurrently": "^9.2.1",
+        "cross-env": "^10.1.0",
+        "electron": "^39.2.7",
+        "electron-builder": "^26.0.12",
+        "wait-on": "^9.0.3"
     }
-  },
-  "dependencies": {
-    "emailjs-com": "^3.2.0",
-    "exceljs": "^4.4.0",
-    "lucide-react": "^0.554.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "recharts": "^3.4.1",
-    "uuid": "^13.0.0",
-    "xlsx": "latest"
-  },
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "autoprefixer": "^10.4.23",
-    "concurrently": "^9.2.1",
-    "cross-env": "^10.1.0",
-    "electron": "^39.2.7",
-    "electron-builder": "^26.0.12",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.19",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0",
-    "wait-on": "^9.0.3"
-  }
 }

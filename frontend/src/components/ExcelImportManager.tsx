@@ -13,7 +13,7 @@ import ImportSummaryModal from './ImportSummaryModal';
 
 
 interface ExcelImportManagerProps {
-    onPushLog: (status: 'Success' | 'Failed', message: string, response?: string) => void;
+    onPushLog: (status: 'Success' | 'Failed' | 'Processing', message: string, response?: string) => void;
     onRegisterFile?: (file: File) => string;
     onUpdateFile?: (id: string, updates: Partial<ProcessedFile>) => void;
     externalFile?: File | null; // File from dashboard re-open
@@ -1017,7 +1017,7 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
                 // Pass userName to generateBulkExcelXml for narration
                 const xml = generateBulkExcelXml(batch, createdMasters, selectedCompany, mappings, userName);
                 console.log(`DEBUG: Batch ${i + 1} XML generated. Size: ${xml.length}`);
-                
+
                 const result = await pushToTally(xml);
                 console.log(`DEBUG: Batch ${i + 1} Result:`, result);
 
@@ -1484,12 +1484,6 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
             {showDisconnectModal && (
                 <TallyDisconnectedModal
                     onClose={() => setShowDisconnectModal(false)}
-                    onRetry={() => {
-                        setShowDisconnectModal(false);
-                        if (pushReadyData) {
-                            startBulkPush(pushReadyData.vouchers, pushReadyData.ledgers, ledgerMappings);
-                        }
-                    }}
                 />
             )}
 

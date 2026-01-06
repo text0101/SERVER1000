@@ -69,9 +69,12 @@ export interface ExcelVoucher {
 }
 
 export interface BankStatementData {
+  id?: string; // Added for UI state management
   documentType?: 'INVOICE' | 'BANK_STATEMENT'; // Classification flag
   bankName: string; // My Bank Ledger Name in Tally
   accountNumber?: string; // Last 4 digits of account number
+  gstin?: string; // Bank GSTIN if available
+  ifsc?: string; // IFSC code if available
   transactions: BankTransaction[];
 }
 
@@ -98,7 +101,7 @@ export interface LogEntry {
   timestamp: Date;
   method: 'POST' | 'GET';
   endpoint: string;
-  status: 'Success' | 'Failed' | 'Pending';
+  status: 'Success' | 'Failed' | 'Pending' | 'Processing';
   message: string;
   response?: string;
 }

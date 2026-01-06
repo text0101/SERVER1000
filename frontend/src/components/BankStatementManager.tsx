@@ -10,18 +10,18 @@ import TallyDisconnectedModal from './TallyDisconnectedModal';
 import PasswordInputModal from './PasswordInputModal';
 
 interface BankStatementManagerProps {
-  onPushLog: (status: 'Success' | 'Failed', message: string, response?: string) => void;
+  onPushLog: (status: 'Success' | 'Failed' | 'Processing', message: string, response?: string) => void;
   externalFile?: File | null;
   externalData?: BankStatementData | null; // Pre-loaded data from dashboard
   onRedirectToInvoice?: (file: File) => void;
   onRegisterFile?: (file: File) => string;
-
+  userName?: string;
   onUpdateFile?: (id: string, updates: Partial<ProcessedFile>) => void;
-  onDelete?: () => void;
+  onDelete?: (id?: string) => void;
 }
 
 const BankStatementManager: React.FC<BankStatementManagerProps> = ({
-  onPushLog, externalFile, externalData, onRedirectToInvoice, onRegisterFile, onUpdateFile, onDelete
+  onPushLog, externalFile, externalData, onRedirectToInvoice, onRegisterFile, onUpdateFile, onDelete, userName
 }) => {
   const [file, setFile] = useState<File | null>(null);
   const [fileId, setFileId] = useState<string | null>(null);
@@ -208,16 +208,16 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
       // Handle Password Required
       // Check 422 OR if message contains password keywords (in case status was lost or changed)
       if (result.status === 422 || (result.message && (result.message.toLowerCase().includes('password') || result.message.toLowerCase().includes('encrypted')))) {
-         console.log("🔒 Password Required for Bank Statement");
-         setPendingPasswordFile(uploadedFile);
-         setShowPasswordModal(true);
-         // Do not fail the file yet, just stop spinner and wait for user
-         setIsProcessing(false);
-         // Optionally update status to "Waiting for Password"
-         if (onUpdateFile && activeFileId) {
-             onUpdateFile(activeFileId, { status: 'Pending', error: 'Password Required' });
-         }
-         return;
+        console.log("🔒 Password Required for Bank Statement");
+        setPendingPasswordFile(uploadedFile);
+        setShowPasswordModal(true);
+        // Do not fail the file yet, just stop spinner and wait for user
+        setIsProcessing(false);
+        // Optionally update status to "Waiting for Password"
+        if (onUpdateFile && activeFileId) {
+          onUpdateFile(activeFileId, { status: 'Pending', error: 'Password Required' });
+        }
+        return;
       }
 
       if (!result.success) {
@@ -255,10 +255,13 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         }
       }
 
-      const newData = {
-        ...result,
+      const newData: BankStatementData = {
+        id: activeFileId || undefined,
+        documentType: 'BANK_STATEMENT',
         bankName: cleanBankName,
         accountNumber: cleanAcctNum,
+        // gstin: result.gstin, // Not available in result yet
+        // ifsc: result.ifsc,
         transactions: rawTransactions.map(t => ({
           ...t,
           id: uuidv4(),
@@ -745,22 +748,22 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         ))}
       </datalist>
       <input ref={fileInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden" onChange={handleFileUpload} />
-      
+
       {/* Password Modal */}
       <PasswordInputModal
-          isOpen={showPasswordModal}
-          fileName={pendingPasswordFile?.name || 'Bank Statement'}
-          onSubmit={(password) => {
-              handleProcessFile(password);
-          }}
-          onCancel={() => {
-              setShowPasswordModal(false);
-              setPendingPasswordFile(null);
-              setIsProcessing(false);
-              if (fileId && onUpdateFile) {
-                  onUpdateFile(fileId, { status: 'Failed', error: 'Password Cancelled' });
-              }
-          }}
+        isOpen={showPasswordModal}
+        fileName={pendingPasswordFile?.name || 'Bank Statement'}
+        onSubmit={(password) => {
+          handleProcessFile(password);
+        }}
+        onCancel={() => {
+          setShowPasswordModal(false);
+          setPendingPasswordFile(null);
+          setIsProcessing(false);
+          if (fileId && onUpdateFile) {
+            onUpdateFile(fileId, { status: 'Failed', error: 'Password Cancelled' });
+          }
+        }}
       />
     </div >
   );
