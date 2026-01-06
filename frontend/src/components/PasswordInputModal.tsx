@@ -1,15 +1,31 @@
-import React, { useState } from 'react';
-import { Lock, X, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, X, ArrowRight, AlertCircle, FileText } from 'lucide-react';
 
 interface PasswordInputModalProps {
     fileName: string;
     isOpen: boolean;
     onSubmit: (password: string) => void;
     onCancel: () => void;
+    error?: string;
+    documentType: 'Invoice' | 'Bank Statement';
 }
 
-const PasswordInputModal: React.FC<PasswordInputModalProps> = ({ fileName, isOpen, onSubmit, onCancel }) => {
+const PasswordInputModal: React.FC<PasswordInputModalProps> = ({
+    fileName,
+    isOpen,
+    onSubmit,
+    onCancel,
+    error,
+    documentType
+}) => {
     const [password, setPassword] = useState('');
+
+    // Reset password when modal opens/closes or error changes
+    useEffect(() => {
+        if (isOpen) {
+            setPassword('');
+        }
+    }, [isOpen]);
 
     if (!isOpen) return null;
 
@@ -17,7 +33,6 @@ const PasswordInputModal: React.FC<PasswordInputModalProps> = ({ fileName, isOpe
         e.preventDefault();
         if (password) {
             onSubmit(password);
-            setPassword(''); // Clear for security
         }
     };
 
@@ -40,12 +55,34 @@ const PasswordInputModal: React.FC<PasswordInputModalProps> = ({ fileName, isOpe
                     </button>
                 </div>
 
+                <div className="bg-indigo-50/50 dark:bg-indigo-900/10 px-6 py-3 border-b border-indigo-100 dark:border-indigo-800 flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span className="text-xs font-bold text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">
+                        Document Type: {documentType}
+                    </span>
+                </div>
+
                 <form onSubmit={handleSubmit} className="p-6">
                     <div className="mb-6">
-                        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
-                            The file <span className="font-semibold text-slate-900 dark:text-white">{fileName}</span> is password protected.
-                            Please enter the password to unlock and process it.
+                        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4 leading-relaxed">
+                            This PDF file is password protected.
+                                 Please enter the password.
                         </p>
+
+                        <div className="mb-4 p-3 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center gap-2">
+                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">File:</span>
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate" title={fileName}>{fileName}</span>
+                        </div>
+
+                        {error && (
+                            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-2">
+                                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                                <div className="flex-1">
+                                    <p className="text-sm text-red-800 dark:text-red-300 font-bold">Incorrect password</p>
+                                    <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">Please try again.</p>
+                                </div>
+                            </div>
+                        )}
 
                         <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
                             Document Password
@@ -57,6 +94,7 @@ const PasswordInputModal: React.FC<PasswordInputModalProps> = ({ fileName, isOpe
                             className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow"
                             placeholder="Enter password..."
                             autoFocus
+                            required
                         />
                     </div>
 
@@ -73,7 +111,7 @@ const PasswordInputModal: React.FC<PasswordInputModalProps> = ({ fileName, isOpe
                             disabled={!password}
                             className="px-6 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
                         >
-                            Unlock Document
+                            Unlock & Continue
                             <ArrowRight className="w-4 h-4" />
                         </button>
                     </div>

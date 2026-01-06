@@ -802,9 +802,23 @@ export const generateTallyXml = (data: InvoiceData, existingLedgers: Set<string>
   const taxLedgerTotals: Record<string, number> = {};
   let totalVoucherValue = 0;
 
-  let mastersXml = `
-    <TALLYMESSAGE xmlns:UDF="TallyUDF"><UNIT NAME="Nos" ACTION="Create"><NAME>Nos</NAME><ISSIMPLEUNIT>Yes</ISSIMPLEUNIT></UNIT></TALLYMESSAGE>
+  // Collect unique units used
+  const uniqueUnits = new Set<string>();
+  data.lineItems.forEach(item => {
+    const u = item.unit && item.unit.trim() ? item.unit.trim() : 'Nos';
+    uniqueUnits.add(u);
+  });
+
+  let mastersXml = ``;
+  
+  // Create Unit Masters
+  uniqueUnits.forEach(u => {
+      mastersXml += `<TALLYMESSAGE xmlns:UDF="TallyUDF"><UNIT NAME="${esc(u)}" ACTION="Alter"><NAME>${esc(u)}</NAME><ISSIMPLEUNIT>Yes</ISSIMPLEUNIT></UNIT></TALLYMESSAGE>`;
+  });
+
+  mastersXml += `
     <TALLYMESSAGE xmlns:UDF="TallyUDF"><GROUP NAME="${ledgerParentGroup}" ACTION="Create"><NAME.LIST><NAME>${ledgerParentGroup}</NAME></NAME.LIST></GROUP></TALLYMESSAGE>`;
+
 
   if (!existingLedgers.has(partyName)) {
     mastersXml += `<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="${esc(partyName)}" ACTION="Create"><NAME.LIST><NAME>${esc(partyName)}</NAME></NAME.LIST><PARENT>${partyGroup}</PARENT><ISBILLWISEON>Yes</ISBILLWISEON><ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE><ADDRESS.LIST><ADDRESS>${esc(partyAddress)}</ADDRESS></ADDRESS.LIST>${partyGstin ? `<PARTYGSTIN>${esc(partyGstin)}</PARTYGSTIN>` : ''}${partyState ? `<STATENAME>${esc(partyState)}</STATENAME>` : ''}</LEDGER></TALLYMESSAGE>`;
@@ -815,7 +829,8 @@ export const generateTallyXml = (data: InvoiceData, existingLedgers: Set<string>
     const rate = Number(item.gstRate) || 0;
     uniqueRates.add(rate);
     const itemName = cleanName(item.description) || `Item @ ${rate}%`;
-    mastersXml += `<TALLYMESSAGE xmlns:UDF="TallyUDF"><STOCKITEM NAME="${esc(itemName)}" ACTION="Create"><NAME.LIST><NAME>${esc(itemName)}</NAME></NAME.LIST><BASEUNITS>Nos</BASEUNITS><OPENINGBALANCE>0 Nos</OPENINGBALANCE><ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE><GSTRATE>${rate}</GSTRATE></STOCKITEM></TALLYMESSAGE>`;
+    const unit = item.unit && item.unit.trim() ? item.unit.trim() : 'Nos';
+    mastersXml += `<TALLYMESSAGE xmlns:UDF="TallyUDF"><STOCKITEM NAME="${esc(itemName)}" ACTION="Create"><NAME.LIST><NAME>${esc(itemName)}</NAME></NAME.LIST><BASEUNITS>${esc(unit)}</BASEUNITS><OPENINGBALANCE>0 ${esc(unit)}</OPENINGBALANCE><ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE><GSTRATE>${rate}</GSTRATE></STOCKITEM></TALLYMESSAGE>`;
   });
 
   // Create tax ledgers - now we create both IGST and CGST/SGST ledgers to handle mixed items
@@ -868,7 +883,8 @@ export const generateTallyXml = (data: InvoiceData, existingLedgers: Set<string>
       taxLedgerTotals[sName] = (taxLedgerTotals[sName] || 0) + remainder;
     }
     const amountStr = `${(amount * itemSign).toFixed(2)}`;
-    inventoryXml += `<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>${esc(itemName)}</STOCKITEMNAME><ISDEEMEDPOSITIVE>${itemDeemedPos}</ISDEEMEDPOSITIVE><ACTUALQTY> ${qty} Nos</ACTUALQTY><BILLEDQTY> ${qty} Nos</BILLEDQTY><RATE>${itemRate.toFixed(2)}/Nos</RATE><AMOUNT>${amountStr}</AMOUNT><ACCOUNTINGALLOCATIONS.LIST><LEDGERNAME>${esc(ledgerName)}</LEDGERNAME><ISDEEMEDPOSITIVE>${itemDeemedPos}</ISDEEMEDPOSITIVE><AMOUNT>${amountStr}</AMOUNT></ACCOUNTINGALLOCATIONS.LIST></ALLINVENTORYENTRIES.LIST>`;
+    const unit = item.unit && item.unit.trim() ? item.unit.trim() : 'Nos';
+    inventoryXml += `<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>${esc(itemName)}</STOCKITEMNAME><ISDEEMEDPOSITIVE>${itemDeemedPos}</ISDEEMEDPOSITIVE><ACTUALQTY> ${qty} ${esc(unit)}</ACTUALQTY><BILLEDQTY> ${qty} ${esc(unit)}</BILLEDQTY><RATE>${itemRate.toFixed(2)}/${esc(unit)}</RATE><AMOUNT>${amountStr}</AMOUNT><ACCOUNTINGALLOCATIONS.LIST><LEDGERNAME>${esc(ledgerName)}</LEDGERNAME><ISDEEMEDPOSITIVE>${itemDeemedPos}</ISDEEMEDPOSITIVE><AMOUNT>${amountStr}</AMOUNT></ACCOUNTINGALLOCATIONS.LIST></ALLINVENTORYENTRIES.LIST>`;
   });
 
   // Calculate the ACTUAL tax amounts that will be written to XML
@@ -971,6 +987,26 @@ export const fetchExistingLedgers = async (companyName?: string): Promise<Set<st
     return ledgers;
   } catch (error) {
     console.warn("Could not fetch existing ledgers", error);
+    return new Set();
+  }
+};
+
+export const fetchExistingUnits = async (companyName?: string): Promise<Set<string>> => {
+  const svCompany = companyName ? esc(companyName) : '##SVCurrentCompany';
+  const xml = `<ENVELOPE><HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER><BODY><EXPORTDATA><REQUESTDESC><REPORTNAME>List of Accounts</REPORTNAME><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><ACCOUNTTYPE>Units</ACCOUNTTYPE><SVCURRENTCOMPANY>${svCompany}</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC></EXPORTDATA></BODY></ENVELOPE>`;
+  try {
+    const response = await fetch(TALLY_API_URL, { method: 'POST', headers: { 'Content-Type': 'text/xml' }, body: xml });
+    const text = await response.text();
+    const units = new Set<string>();
+    const regexName = /<NAME>(.*?)<\/NAME>/gi;
+    let match;
+    while ((match = regexName.exec(text)) !== null) {
+      const u = decodeHtml(match[1]).trim();
+      if (u) units.add(u);
+    }
+    return units;
+  } catch (error) {
+    console.warn("Could not fetch existing units", error);
     return new Set();
   }
 };

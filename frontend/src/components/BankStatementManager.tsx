@@ -2,26 +2,36 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { UploadCloud, FileText, ArrowLeft, ArrowRight, Loader2, Trash2, Landmark, Save, History, Zap, ShieldCheck, CheckCircle } from 'lucide-react';
 import { BankStatementData, BankTransaction, ProcessedFile } from '../types';
-import { processBankStatementPDF, processBankStatement } from '../services/backendService';
+import { processBankStatementPDF, processBankStatement, unlockPdf } from '../services/backendService';
 import { BACKEND_API_KEY } from '../constants';
 import { generateBankStatementXml, pushToTally, fetchExistingLedgers, fetchOpenCompanies, checkTallyConnection } from '../services/tallyService';
 import { v4 as uuidv4 } from 'uuid';
 import TallyDisconnectedModal from './TallyDisconnectedModal';
-import PasswordInputModal from './PasswordInputModal';
+import InvalidFileModal from './InvalidFileModal';
+import { isPasswordRequiredError } from '../utils/passwordDetection';
 
 interface BankStatementManagerProps {
   onPushLog: (status: 'Success' | 'Failed' | 'Processing', message: string, response?: string) => void;
   externalFile?: File | null;
   externalData?: BankStatementData | null; // Pre-loaded data from dashboard
+  externalStatus?: string; // Status from dashboard
   onRedirectToInvoice?: (file: File) => void;
   onRegisterFile?: (file: File) => string;
   userName?: string;
   onUpdateFile?: (id: string, updates: Partial<ProcessedFile>) => void;
   onDelete?: (id?: string) => void;
+  onBack?: () => void;
+  // Unified password request callback - provided by App.tsx
+  onRequestPassword?: (
+    file: File,
+    documentType: 'Invoice' | 'Bank Statement',
+    onUnlock: (password: string) => Promise<void>,
+    errorMessage?: string
+  ) => void;
 }
 
 const BankStatementManager: React.FC<BankStatementManagerProps> = ({
-  onPushLog, externalFile, externalData, onRedirectToInvoice, onRegisterFile, onUpdateFile, onDelete, userName
+  onPushLog, externalFile, externalData, externalStatus, onRedirectToInvoice, onRegisterFile, onUpdateFile, onDelete, onBack, userName, onRequestPassword
 }) => {
   const [file, setFile] = useState<File | null>(null);
   const [fileId, setFileId] = useState<string | null>(null);
@@ -34,9 +44,9 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
   const [hasDraft, setHasDraft] = useState(false);
   const pageScrollRef = useRef<HTMLDivElement>(null);
   const processedFileRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Password Handling
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  // Password file state (for tracking pending password file locally)
   const [pendingPasswordFile, setPendingPasswordFile] = useState<File | null>(null);
 
   // Drag and Drop State
@@ -87,9 +97,40 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
 
   useEffect(() => {
     // Only set file state if we have a new file
-    if (externalFile && externalFile.name !== processedFileRef.current && !isProcessing) {
+    if (externalFile && externalFile.name !== processedFileRef.current) {
       setFile(externalFile);
-      setStep(1); // Ensure we are on the upload/process step
+
+      const hasData = externalData && externalData.transactions.length > 0;
+      const isProcessingExternal = externalStatus === 'Processing';
+      const isFailed = externalStatus === 'Failed';
+      const isSuccess = externalStatus === 'Success' || externalStatus === 'Ready';
+
+      if (hasData || isSuccess) {
+        processedFileRef.current = externalFile.name;
+        setStep(2);
+        setIsProcessing(false);
+      } else if (isProcessingExternal) {
+        // Ghost processing typically
+        processedFileRef.current = externalFile.name;
+        setIsProcessing(true);
+        setStep(1);
+      } else if (isFailed) {
+        processedFileRef.current = externalFile.name;
+        setIsProcessing(false);
+        setStep(1);
+      } else {
+        // New file or Pending
+        setStep(1);
+
+        // CRITICAL FIX: Only reset processing if this is a DIFFERENT file.
+        // If we are already processing this file locally (isProcessing=true), 
+        // receiving "Pending" status from parent shouldn't stop us.
+        const isSameFile = file && file.name === externalFile.name;
+        if (!isSameFile) {
+          setIsProcessing(false);
+        }
+        // Do NOT set processedFileRef.current so auto-processing starts (if not already running)
+      }
     } else if (!externalFile) {
       // Reset if external file is cleared (e.g. Cancelled)
       setFile(null);
@@ -98,14 +139,15 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
       processedFileRef.current = null;
       setIsProcessing(false);
     }
-  }, [externalFile]);
+  }, [externalFile, externalData, externalStatus]);
 
   // Process file automatically when it is set (and not processed yet)
+  // BUT skip if we're waiting for password input
   useEffect(() => {
-    if (file && file.name !== processedFileRef.current && !isProcessing) {
+    if (file && file.name !== processedFileRef.current && !isProcessing && !pendingPasswordFile) {
       handleProcessFile();
     }
-  }, [file]);
+  }, [file, pendingPasswordFile]);
 
   useEffect(() => {
     if (externalData && externalData.transactions.length > 0) {
@@ -130,6 +172,7 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         accountNumber: cleanAcct
       });
       setStep(2); // Skip to transaction table
+      setIsProcessing(false);
     } else if (externalData === null && !externalFile && step === 2) {
       // Reset if data is cleared externally (e.g. deleted)
       setData({
@@ -159,12 +202,19 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
     }
   };
 
-  const handleProcessFile = async (password?: string) => {
-    const uploadedFile = file;
-    if (!uploadedFile) return;
+  const handleProcessFile = async (password?: string, fileOverride?: File) => {
+    const uploadedFile = fileOverride || file;
+
+    // Safety check: if we have a password (retry) but no file, return
+    if (!uploadedFile) {
+      return;
+    }
 
     // Prevent concurrent processing unless we are retrying with password
     if (isProcessing && !password) return;
+
+    // Create new AbortController for this processing session
+    abortControllerRef.current = new AbortController();
 
     let currentFileId: string | null = null;
 
@@ -175,8 +225,8 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         setFileId(currentFileId);
       }
     } else {
-      // If retrying, close modal
-      setShowPasswordModal(false);
+      // If retrying, clear pending password file
+      setPendingPasswordFile(null);
     }
 
     const activeFileId = currentFileId || fileId;
@@ -193,9 +243,10 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
 
       // Use page-by-page processing for PDFs to handle large files
       // If password provided, pass it
+      // Pass abort signal to allow cancellation
       const result = isPdf
-        ? await processBankStatementPDF(uploadedFile, BACKEND_API_KEY, password)
-        : await processBankStatement(uploadedFile, BACKEND_API_KEY);
+        ? await processBankStatementPDF(uploadedFile, BACKEND_API_KEY, password, abortControllerRef.current?.signal)
+        : await processBankStatement(uploadedFile, BACKEND_API_KEY, abortControllerRef.current?.signal);
 
       if (result.status === 429) {
         onPushLog('Failed', 'Quota Exceeded', 'AI quota exceeded. Please wait or upgrade plan.');
@@ -205,15 +256,45 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         return;
       }
 
-      // Handle Password Required
-      // Check 422 OR if message contains password keywords (in case status was lost or changed)
-      if (result.status === 422 || (result.message && (result.message.toLowerCase().includes('password') || result.message.toLowerCase().includes('encrypted')))) {
-        console.log("🔒 Password Required for Bank Statement");
+      // Password-protected check
+      console.log("🔒 Password Required check: ", result.status, result.message);
+      if (isPasswordRequiredError(result)) {
+        console.log("✅ Requesting password via callback...");
+
+        // If we already tried a password and failed, it's incorrect
+        const isRetry = !!password;
+
+        // Track the file locally
         setPendingPasswordFile(uploadedFile);
-        setShowPasswordModal(true);
-        // Do not fail the file yet, just stop spinner and wait for user
+
+        // Request password via the unified modal in App.tsx
+        if (onRequestPassword) {
+          onRequestPassword(
+            uploadedFile,
+            'Bank Statement',
+            async (pwd: string) => {
+              try {
+                // 1. Verify password by unlocking PDF
+                const decryptedPdf = await unlockPdf(uploadedFile, pwd);
+                if (!decryptedPdf) {
+                  throw new Error('Incorrect password');
+                }
+
+                // 2. Success - continue processing with password
+                setPendingPasswordFile(null);
+                await handleProcessFile(pwd, uploadedFile);
+              } catch (e) {
+                throw e; // Let the hook handle the error display
+              }
+            },
+            isRetry ? 'Incorrect password. Please try again.' : ''
+          );
+        }
+
+        processedFileRef.current = null;
         setIsProcessing(false);
-        // Optionally update status to "Waiting for Password"
+
+        // Update file status to show it's waiting for password
         if (onUpdateFile && activeFileId) {
           onUpdateFile(activeFileId, { status: 'Pending', error: 'Password Required' });
         }
@@ -224,13 +305,17 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         throw new Error(result.message || "Processing failed");
       }
 
+      // DEBUG: Log the result to check documentType
+      console.log('🔍 Bank Statement Processing Result:', result);
+      console.log('📋 Document Type:', result.documentType);
+
       if (result.documentType === 'INVOICE') {
+        console.log('✅ INVOICE DETECTED! Showing mismatch alert...');
         setShowInvoiceAlert(true);
         // Mark as processed so we don't loop, even though it's the "wrong" type
         processedFileRef.current = uploadedFile.name;
-        if (onUpdateFile && activeFileId) {
-          onUpdateFile(activeFileId, { status: 'Failed', error: 'Detected as Invoice, not Bank Statement' });
-        }
+        // Do NOT call onUpdateFile with failure yet, waiting for user decision
+        setIsProcessing(false);
         return;
       }
 
@@ -299,6 +384,13 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
         });
       }
     } catch (error: any) {
+      // Check if this was an abort/cancellation
+      if (error?.name === 'AbortError' || error?.message?.includes('cancel')) {
+        console.log('Processing cancelled by user');
+        setIsProcessing(false);
+        return; // Don't log as failure if user cancelled
+      }
+
       const detail =
         error?.message ||
         error?.response?.detail ||
@@ -318,6 +410,34 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // handlePasswordSubmit removed - now handled by onRequestPassword callback in App.tsx
+
+  const handleCancelProcessing = () => {
+    // Abort the ongoing API call
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Reset state
+    setIsProcessing(false);
+    setShowInvoiceAlert(false);
+    processedFileRef.current = null;
+
+    // Call onDelete to remove from dashboard
+    if (onDelete) {
+      onDelete(fileId || data.id || undefined);
+    }
+
+    // Clear file
+    setFile(null);
+    setFileId(null);
+    setStep(1);
+
+    // Clear pending password file
+    setPendingPasswordFile(null);
   };
 
   const handleClearAlert = () => {
@@ -477,51 +597,38 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
-      {showInvoiceAlert && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm rounded-xl animate-fade-in">
-          <div className="bg-white dark:bg-slate-800 p-8 rounded-xl shadow-2xl border-2 border-orange-400 max-w-md w-full text-center">
-            <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4">
-              <FileText className="w-8 h-8" />
-            </div>
-            <h3 className="text-xl font-bold text-slate-900 dark:text-white">This looks like an Invoice!</h3>
-            <p className="text-slate-500 dark:text-slate-400 mt-2 mb-6">
-              You uploaded <span className="font-semibold text-slate-800 dark:text-slate-200">{file?.name}</span> in the Bank Statement section, but it appears to be a Tax Invoice.
-            </p>
-            <div className="flex flex-col gap-3">
-              <button onClick={handleRedirect} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-lg transition-transform hover:-translate-y-1 flex items-center justify-center gap-2">
-                <ArrowRight className="w-4 h-4" /> Process as Invoice
-              </button>
-              <button onClick={() => setShowInvoiceAlert(false)} className="w-full py-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-semibold">
-                No, keep here (Force parse)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <InvalidFileModal
+        isOpen={showInvoiceAlert}
+        type="mismatch"
+        fileName={file?.name || 'Document'}
+        reason=""
+        onClose={() => setShowInvoiceAlert(false)}
+        onConfirm={handleRedirect}
+        currentSection="Bank Statement"
+        detectedType="Invoice"
+        targetSectionName="Invoice processor"
+      />
 
       {showDisconnectModal && <TallyDisconnectedModal onClose={() => setShowDisconnectModal(false)} />}
-
-      <PasswordInputModal
-        isOpen={showPasswordModal}
-        fileName={pendingPasswordFile?.name || 'Document'}
-        onSubmit={(password) => handleProcessFile(password)}
-        onCancel={() => {
-          setShowPasswordModal(false);
-          setPendingPasswordFile(null);
-          setIsProcessing(false);
-        }}
-      />
 
       <div
         className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex justify-between items-center shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3">
-          {step === 2 && (
+          {(step === 2 || onBack) && (
             <button
-              onClick={() => setStep(1)}
+              onClick={() => {
+                // If we have external data (viewing mode), back should go to dashboard
+                // Otherwise, if we are in step 2 (just uploaded), go back to step 1
+                if (step === 2 && !externalData) {
+                  setStep(1);
+                } else if (onBack) {
+                  onBack();
+                }
+              }}
               className="p-1.5 -ml-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 rounded-lg transition-colors"
-              title="Back to Upload"
+              title={step === 2 && !externalData ? "Back to Upload" : "Back to Dashboard"}
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -585,7 +692,7 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
                 <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Extracting dates, descriptions, and amounts from your document.</p>
                 {onDelete && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(fileId || data.id || undefined); }}
+                    onClick={(e) => { e.stopPropagation(); handleCancelProcessing(); }}
                     className="mt-4 px-4 py-1.5 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded-full text-xs font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-red-500 dark:hover:text-red-400 transition-colors inline-flex items-center gap-1.5"
                   >
                     Cancel
@@ -749,23 +856,8 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
       </datalist>
       <input ref={fileInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden" onChange={handleFileUpload} />
 
-      {/* Password Modal */}
-      <PasswordInputModal
-        isOpen={showPasswordModal}
-        fileName={pendingPasswordFile?.name || 'Bank Statement'}
-        onSubmit={(password) => {
-          handleProcessFile(password);
-        }}
-        onCancel={() => {
-          setShowPasswordModal(false);
-          setPendingPasswordFile(null);
-          setIsProcessing(false);
-          if (fileId && onUpdateFile) {
-            onUpdateFile(fileId, { status: 'Failed', error: 'Password Cancelled' });
-          }
-        }}
-      />
-    </div >
+      {/* Password Modal is now handled by App.tsx via onRequestPassword callback */}
+    </div>
   );
 };
 

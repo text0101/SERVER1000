@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { usePasswordProtection } from './hooks/usePasswordProtection';
 import InvoiceEditor from './components/InvoiceEditor';
 import TallyLogs from './components/TallyLogs';
 import Dashboard from './components/Dashboard';
@@ -25,6 +26,7 @@ import { v4 as uuidv4 } from 'uuid';
 import TallyDisconnectedModal from './components/TallyDisconnectedModal';
 import ImportSummaryModal from './components/ImportSummaryModal';
 import PasswordInputModal from './components/PasswordInputModal';
+import { isPasswordRequiredError } from './utils/passwordDetection';
 
 
 const App: React.FC = () => {
@@ -109,9 +111,17 @@ const App: React.FC = () => {
     const [tallyStatus, setTallyStatus] = useState<{ online: boolean; info: string; mode: 'full' | 'blind' | 'none'; activeCompany?: string }>({ online: false, info: 'Connecting...', mode: 'none' });
     const [showTallyDisconnectModal, setShowTallyDisconnectModal] = useState(false);
 
-    // Password Handling
-    const [showPasswordModal, setShowPasswordModal] = useState(false);
-    const [pendingPasswordFile, setPendingPasswordFile] = useState<ProcessedFile | null>(null);
+    // Password Handling - Unified for both Invoice and Bank Statement
+    const {
+        isOpen: showPasswordModal,
+        passwordFile: pendingPasswordFile,
+        passwordError,
+        documentType: passwordDocumentType,
+        requirePassword,
+        closePasswordModal,
+        setPasswordError,
+        handlePasswordSubmit
+    } = usePasswordProtection<ProcessedFile | File>();
 
     // Token Limit Modal
     const [showTokenLimitModal, setShowTokenLimitModal] = useState(false);
@@ -242,6 +252,16 @@ const App: React.FC = () => {
             uploadTimestamp: Date.now()
         };
         setProcessedFiles(prev => [newEntry, ...prev]);
+
+        // CRITICAL FIX: Update the specific "pending/active" file state
+        // This ensures that the components (BankStatementManager, ExcelImport) receive the new file as a prop
+        // immediately after registration, preventing them from resetting to empty state.
+        if (type === 'BANK_STATEMENT') {
+            setPendingBankStatementFile(file);
+        } else if (type === 'EXCEL_IMPORT') {
+            setPendingExcelFile(newEntry);
+        }
+
         return newEntry.id;
     };
 
@@ -324,13 +344,70 @@ const App: React.FC = () => {
             if (isCancelledRef.current) return;
 
             // Handle Password Required
-            if (result.status === 422 && (result.message?.includes('Password') || result.message?.includes('password'))) {
-                setPendingPasswordFile(entry);
-                setShowPasswordModal(true);
+            if (isPasswordRequiredError(result)) {
+                // Request password with callback for handling unlock
+                requirePassword(
+                    entry,
+                    'Invoice',
+                    async (pwd: string) => {
+                        try {
+                            // 1. Verify password by unlocking PDF
+                            const decryptedB64 = await unlockPdf(entry.file, pwd);
+                            if (!decryptedB64) {
+                                throw new Error('Incorrect password');
+                            }
+
+                            // 2. Success - Close modal and process
+                            setPasswordError('');
+                            closePasswordModal();
+
+                            // 3. Update UI
+                            setProcessedFiles(prev => prev.map(f => f.id === entry.id ? { ...f, status: 'Processing' } : f));
+
+                            // 4. Generate preview if possible
+                            if (decryptedB64) {
+                                try {
+                                    const binStr = atob(decryptedB64);
+                                    const len = binStr.length;
+                                    const arr = new Uint8Array(len);
+                                    for (let i = 0; i < len; i++) {
+                                        arr[i] = binStr.charCodeAt(i);
+                                    }
+                                    const blob = new Blob([arr], { type: 'application/pdf' });
+                                    const previewUrl = URL.createObjectURL(blob);
+                                    setProcessedFiles(prev => prev.map(f =>
+                                        f.id === entry.id ? { ...f, previewUrl, error: undefined } : f
+                                    ));
+                                } catch (e) {
+                                    console.error("Preview generation failed", e);
+                                }
+                            }
+
+                            // 5. Continue with AI processing
+                            await processSingleFile(entry, 0, pwd);
+
+                            // 6. Check for next password-protected file
+                            setTimeout(() => {
+                                const nextFile = processedFiles.find(f =>
+                                    f.status === 'Pending' && f.error === 'Password Required'
+                                );
+                                if (nextFile) {
+                                    // Will recursively trigger password flow
+                                    processSingleFile(nextFile);
+                                }
+                            }, 100);
+                        } catch (e) {
+                            throw e; // Let the hook handle the error display
+                        }
+                    },
+                    password ? 'Incorrect password. Please try again.' : ''
+                );
+
                 // Set status to Pending so it doesn't look failed
                 setProcessedFiles(prev => prev.map(f => f.id === entry.id ? { ...f, status: 'Pending', error: 'Password Required' } : f));
                 return;
             }
+
 
             if (!result.success || !result.invoice) {
                 throw new Error(result.message || 'Failed to process document');
@@ -436,7 +513,20 @@ const App: React.FC = () => {
     const handleSwitchToBankStatement = () => {
         const fileToMove = mismatchedFileAlert.file;
         if (fileToMove) {
-            setProcessedFiles(prev => prev.filter(f => f.id !== fileToMove.id));
+            // Transform the entry instead of deleting it
+            setProcessedFiles(prev => prev.map(f => {
+                if (f.id === fileToMove.id) {
+                    return {
+                        ...f,
+                        sourceType: 'BANK_STATEMENT',
+                        status: 'Pending',
+                        error: undefined,
+                        bankData: undefined // Force re-process
+                    };
+                }
+                return f;
+            }));
+
             setPendingBankStatementFile(fileToMove.file);
             setCurrentView(AppView.BANK_STATEMENT);
             setMismatchedFileAlert({ show: false, file: null });
@@ -1296,11 +1386,17 @@ const App: React.FC = () => {
             return (
                 <BankStatementManager
                     key={pendingBankStatementFile ? pendingBankStatementFile.name : 'bank-empty'}
-                    onPushLog={handlePushLog} externalFile={pendingBankStatementFile} externalData={bankFileEntry?.bankData || null} onRedirectToInvoice={handleRedirectToInvoice}
+                    onPushLog={handlePushLog}
+                    externalFile={pendingBankStatementFile}
+                    externalData={bankFileEntry?.bankData || null}
+                    externalStatus={bankFileEntry?.status}
+                    onRedirectToInvoice={handleRedirectToInvoice}
                     onRegisterFile={(f) => handleRegisterFile(f, 'BANK_STATEMENT')}
                     onUpdateFile={handleUpdateFile}
                     onDelete={(id) => handleDeleteFile(id || bankFileEntry?.id)}
+                    onBack={() => setCurrentView(AppView.DASHBOARD)}
                     userName={userName}
+                    onRequestPassword={requirePassword}
                 />
             );
         }
@@ -1375,7 +1471,7 @@ const App: React.FC = () => {
                 onClose={() => setSummaryModalOpen(false)}
                 summary={importSummary}
             />
-            {invalidFileAlert.show && <InvalidFileModal fileName={invalidFileAlert.fileName} reason={invalidFileAlert.reason} onClose={() => setInvalidFileAlert({ show: false, fileName: '', reason: '' })} />}
+            {invalidFileAlert.show && <InvalidFileModal isOpen={invalidFileAlert.show} fileName={invalidFileAlert.fileName} reason={invalidFileAlert.reason} onClose={() => setInvalidFileAlert({ show: false, fileName: '', reason: '' })} />}
             <BulkLedgerCreationModal
                 isOpen={showBulkLedgerModal}
                 onClose={() => setShowBulkLedgerModal(false)}
@@ -1392,36 +1488,22 @@ const App: React.FC = () => {
                     isDeleteAll={deleteConfirm.mode === 'all'}
                 />
             )}
-            {mismatchedFileAlert.show && mismatchedFileAlert.file && (
-
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
-                    <div className="bg-white dark:bg-slate-800 p-8 rounded-xl shadow-2xl border-2 border-orange-400 max-w-md w-full text-center relative">
-                        <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <AlertTriangle className="w-8 h-8" />
-                        </div>
-                        <h3 className="text-xl font-bold text-slate-900 dark:text-white">Document Type Mismatch</h3>
-                        <div className="my-4 text-sm text-slate-600 dark:text-slate-300">
-                            <p className="mb-2">
-                                You uploaded <strong>{mismatchedFileAlert.file.fileName}</strong> in the Invoice section, but our AI detected it as a <strong>Bank Statement</strong>.
-                            </p>
-                            <p>Would you like to move it to the Bank Statement processor?</p>
-                        </div>
-                        <div className="flex flex-col gap-3">
-                            <button
-                                onClick={handleSwitchToBankStatement}
-                                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-2"
-                            >
-                            </button>
-                            <button
-                                onClick={() => setMismatchedFileAlert({ show: false, file: null })}
-                                className="w-full py-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                            >
-                                Dismiss (Ignore)
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <InvalidFileModal
+                isOpen={mismatchedFileAlert.show}
+                type="mismatch"
+                fileName={mismatchedFileAlert.file?.fileName || 'Document'}
+                reason=""
+                onClose={() => {
+                    if (mismatchedFileAlert.file) {
+                        setProcessedFiles(prev => prev.filter(f => f.id !== mismatchedFileAlert.file?.id));
+                    }
+                    setMismatchedFileAlert({ show: false, file: null });
+                }}
+                onConfirm={handleSwitchToBankStatement}
+                currentSection="Invoice"
+                detectedType="Bank Statement"
+                targetSectionName="Bank Statement processor"
+            />
 
             <Navbar
                 currentView={currentView}
@@ -1446,86 +1528,16 @@ const App: React.FC = () => {
                     {renderContent()}
                 </div>
             </main>
-            {/* Password Modal */}
+            {/* Unified Password Modal - Used by both Invoice and Bank Statement */}
             <PasswordInputModal
                 isOpen={showPasswordModal}
-                fileName={pendingPasswordFile?.fileName || 'Document'}
-                onSubmit={async (password) => {
-                    if (pendingPasswordFile) {
-                        setShowPasswordModal(false);
-
-                        // 1. Instant Unlock (UI Update First)
-                        setProcessedFiles(prev => prev.map(f => f.id === pendingPasswordFile.id ? { ...f, status: 'Processing' } : f));
-
-                        try {
-                            const decryptedB64 = await unlockPdf(pendingPasswordFile.file, password);
-                            if (decryptedB64) {
-                                // Convert to Blob for Preview
-                                const binStr = atob(decryptedB64);
-                                const len = binStr.length;
-                                const arr = new Uint8Array(len);
-                                for (let i = 0; i < len; i++) {
-                                    arr[i] = binStr.charCodeAt(i);
-                                }
-                                const blob = new Blob([arr], { type: 'application/pdf' });
-                                const previewUrl = URL.createObjectURL(blob);
-
-                                // Update UI IMMEDIATELY to show preview
-                                setProcessedFiles(prev => prev.map(f =>
-                                    f.id === pendingPasswordFile.id ? {
-                                        ...f,
-                                        previewUrl: previewUrl,
-                                        error: undefined // Remove lock screen
-                                    } : f
-                                ));
-                            }
-                        } catch (e) {
-                            console.error("Quick unlock failed, falling back to full process", e);
-                        }
-
-                        // 2. Continue with Full AI Processing (Background)
-                        const currentFile = pendingPasswordFile;
-                        setPendingPasswordFile(null);
-
-                        // Process the file with password
-                        await processSingleFile(currentFile, 0, password);
-
-                        // 3. Check for next pending password-protected file
-                        // Use setTimeout to ensure state is updated
-                        setTimeout(() => {
-                            setProcessedFiles(prev => {
-                                const nextPasswordFile = prev.find(f =>
-                                    f.status === 'Pending' && f.error === 'Password Required'
-                                );
-                                if (nextPasswordFile) {
-                                    setPendingPasswordFile(nextPasswordFile);
-                                    setShowPasswordModal(true);
-                                }
-                                return prev;
-                            });
-                        }, 100);
-                    }
-                }}
+                fileName={pendingPasswordFile ? ('fileName' in pendingPasswordFile ? pendingPasswordFile.fileName : pendingPasswordFile.name) : 'Document'}
+                error={passwordError}
+                documentType={passwordDocumentType}
+                onSubmit={handlePasswordSubmit}
                 onCancel={() => {
-                    setShowPasswordModal(false);
-                    if (pendingPasswordFile) {
-                        setProcessedFiles(prev => prev.map(f => f.id === pendingPasswordFile.id ? { ...f, status: 'Failed', error: 'Password Cancelled' } : f));
-                    }
-                    setPendingPasswordFile(null);
-
-                    // Check for next pending password-protected file after cancel too
-                    setTimeout(() => {
-                        setProcessedFiles(prev => {
-                            const nextPasswordFile = prev.find(f =>
-                                f.status === 'Pending' && f.error === 'Password Required'
-                            );
-                            if (nextPasswordFile) {
-                                setPendingPasswordFile(nextPasswordFile);
-                                setShowPasswordModal(true);
-                            }
-                            return prev;
-                        });
-                    }, 100);
+                    closePasswordModal();
+                    setPasswordError('');
                 }}
             />
 

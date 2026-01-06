@@ -29,7 +29,8 @@ def split_pdf_to_images(pdf_bytes: bytes, max_size_mb: float = 3.5, password: st
         for page_num, page in enumerate(pdf.pages, start=1):
             # Convert page to image with pdfplumber's built-in method
             # This returns a PIL Image, but we convert it immediately
-            img = page.to_image(resolution=150)  # 150 DPI for good quality
+            print(f"DEBUG: Converting page {page_num}/{total_pages} to image...")
+            img = page.to_image(resolution=100)  # Reduced to 100 DPI for speed/reliability
             
             # Save to bytes
             buffered = io.BytesIO()

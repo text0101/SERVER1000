@@ -802,6 +802,7 @@ Return VALID JSON ONLY with the following fields:
 
 Rules:
 - If the document is NOT an invoice, set documentType = "INVALID"
+- CRITICAL: If the document appears to be a BANK STATEMENT (has "Withdrawal", "Deposit", "Balance" columns, or "Statement of Account"), set documentType = "BANK_STATEMENT" and return immediately.
 - Do not include explanations
 - Do not include extra text
 - VERIFY MATH: total = taxableValue + (taxableValue * gstRate/100) is NOT always true for multi-rate invoices.
@@ -1038,7 +1039,10 @@ Required fields (camelCase strictly):
 - buyerName
 - buyerAddress
 - buyerGstin
+- buyerAddress
+- buyerGstin
 - invoiceNumber
+- documentType (INVOICE | BANK_STATEMENT | INVALID)
 - invoiceDate (YYYY-MM-DD format)
 - taxableValue
 - totalAmount
@@ -1055,6 +1059,10 @@ GST EXTRACTION RULES:
 Invoice text:
 {final_text}
 
+CRITICAL RULES:
+1. If this text looks like a BANK STATEMENT (contains "Withdrawal", "Deposit", "Balance" columns, dates in a list, "Opening Balance"), set "documentType": "BANK_STATEMENT" and return strictly valid JSON.
+2. Otherwise, assume it is an INVOICE.
+
 Return ONLY the JSON object, no markdown formatting."""
 
         # Call Gemini with compressed text
@@ -1068,9 +1076,18 @@ Return ONLY the JSON object, no markdown formatting."""
         invoice_data = json.loads(clean_json)
         print(f"DEBUG INVOICE PDF DATA: {invoice_data}")
         
+        
+        # Determine strict document type
+        ai_doc_type = invoice_data.get("documentType", "INVOICE")
+        
+        # Fallback Heuristic: If AI messed up but we see strong bank keywords in text
+        if "withdrawal" in final_text.lower() and "deposit" in final_text.lower() and "balance" in final_text.lower():
+             print("DEBUG: Heuristic detected BANK_STATEMENT overriding AI")
+             ai_doc_type = "BANK_STATEMENT"
+             
         return {
             "success": True,
-            "documentType": "INVOICE",
+            "documentType": ai_doc_type,
             "data": invoice_data,
             "stats": {
                 "original_text_length": len(extracted_text),
@@ -1130,6 +1147,9 @@ async def process_bank_statement_pdf(
     # ------------------------------------------------------------------
     # UNIFIED DECRYPTION LOGIC (Same as Invoices)
     # ------------------------------------------------------------------
+    # Track if we successfully decrypted
+    was_decrypted = False
+
     if password:
         try:
             import io
@@ -1148,6 +1168,7 @@ async def process_bank_statement_pdf(
             
             # Clear password since we now have unlocked bytes
             password = None 
+            was_decrypted = True # Mark as decrypted so we don't ask again
             print("✅ Bank Statement Decrypted Successfully")
             
         except Exception as e:
@@ -1172,9 +1193,13 @@ async def process_bank_statement_pdf(
     except Exception as e:
         print(f"PDF Text extraction failed: {e}")
         error_str = (str(e) + " " + repr(e)).lower()
-        if "password" in error_str or "encrypted" in error_str or "decryption" in error_str:
+        
+        # Only raise 422 if we haven't already decrypted it
+        # If we DID decrypt it, "Password incorrect" here is likely a pdfplumber false positive/compat issue
+        # so we should fall back to Image processing instead of asking user again.
+        if ("password" in error_str or "encrypted" in error_str or "decryption" in error_str) and not was_decrypted:
             raise HTTPException(status_code=422, detail="Password required")
-        # Continue to image fallback ONLY if not a password error
+        # Continue to image fallback ONLY if not a password error (or if we already decrypted)
     
     # Check if we have enough text to consider it a digital PDF
     # (Scanned docs might have a few chars of noise)
@@ -1276,11 +1301,53 @@ JSON OUTPUT ONLY:
         # Check both str and repr to catch "pdfminer.pdfdocument.PDFPasswordIncorrect"
         error_str = (str(e) + " " + repr(e)).lower()
         
-        if "password" in error_str or "encrypted" in error_str or "decryption" in error_str or "incorrect" in error_str:
+        if ("password" in error_str or "encrypted" in error_str or "decryption" in error_str or "incorrect" in error_str) and not was_decrypted:
              raise HTTPException(status_code=422, detail="Password required")
         
         raise HTTPException(status_code=500, detail=f"Failed to convert PDF to images: {str(e)}")
         
+    # First, detect document type using first page
+    detected_doc_type = "BANK_STATEMENT"  # default
+    
+    if len(pages) > 0:
+        first_img_base64, _ = pages[0]
+        try:
+            type_check_prompt = """CRITICAL DOCUMENT TYPE CHECK:
+
+Analyze this image and determine if it is:
+1. An INVOICE/BILL (contains: Tax Invoice, GSTIN, Bill To, itemized products/services, supplier details)
+2. A BANK STATEMENT (contains: Bank name, Account number, transaction table with dates/debits/credits)
+
+Return ONLY a JSON object:
+{
+  "documentType": "INVOICE" or "BANK_STATEMENT"
+}
+"""
+            type_response = model.generate_content(
+                [
+                    {"mime_type": "image/png", "data": first_img_base64},
+                    type_check_prompt
+                ],
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            type_data = json.loads(clean_json_text(type_response.text))
+            detected_doc_type = type_data.get("documentType", "BANK_STATEMENT")
+            print(f"📋 Detected Document Type from Image: {detected_doc_type}")
+            
+        except Exception as e:
+            print(f"⚠️ Document type detection failed, defaulting to BANK_STATEMENT: {e}")
+    
+    # If INVOICE detected, return immediately with documentType
+    if detected_doc_type == "INVOICE":
+        return {
+            "success": True,
+            "documentType": "INVOICE",
+            "transactions": [],
+            "note": "Invoice detected in Bank Statement section via Image Processing"
+        }
+    
+    # Otherwise proceed with bank statement extraction
     transactions = []
 
     for img_base64, _ in pages:

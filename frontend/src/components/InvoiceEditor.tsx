@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { InvoiceData, LineItem } from '../types';
 import { Plus, Trash2, Save, RefreshCw, FileText, FilePlus, ExternalLink, ArrowRight, Loader2, ChevronLeft, ChevronRight, FileDown, Check, AlertTriangle, ShieldAlert, User, Building, ChevronDown, ZoomIn, ZoomOut, RotateCw, RotateCcw, Lock } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import { fetchOpenCompanies, fetchExistingLedgers, fetchCompanyDetails } from '../services/tallyService';
+import { fetchOpenCompanies, fetchExistingLedgers, fetchCompanyDetails, fetchExistingUnits } from '../services/tallyService';
 
 interface InvoiceEditorProps {
     data: InvoiceData;
@@ -91,6 +91,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
 
     // Ledger Fetching State
     const [ledgers, setLedgers] = useState<string[]>([]);
+    const [units, setUnits] = useState<string[]>(['Nos', 'Kgs', 'Pcs', 'Box', 'Mtr', 'Ltr', 'Set', 'Bag', 'Doz', 'Btl', 'Can', 'Ctn', 'Gm', 'Ton', 'Bdl']);
     const [loadingLedgers, setLoadingLedgers] = useState(false);
 
     // Dropdown UI State
@@ -174,6 +175,7 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
     // Fetch ledgers whenever targetCompany changes
     useEffect(() => {
         fetchLedgers();
+        fetchUnits();
     }, [formData.targetCompany]);
 
     // Effect to pre-fill company details - REMOVED to allow validation of extracted data
@@ -199,6 +201,18 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
             console.error("Failed to load ledgers", e);
         } finally {
             setLoadingLedgers(false);
+        }
+    };
+
+    const fetchUnits = async () => {
+        try {
+            const unitSet = await fetchExistingUnits(formData.targetCompany);
+            // Merge defaults with fetched units
+            const defaults = ['Nos', 'Kgs', 'Pcs', 'Box', 'Mtr', 'Ltr', 'Set', 'Bag', 'Doz', 'Btl', 'Can', 'Ctn', 'Gm', 'Ton', 'Bdl'];
+            const merged = Array.from(new Set([...defaults, ...unitSet])).sort();
+            setUnits(merged);
+        } catch (e) {
+            console.error("Failed to load units", e);
         }
     };
 
@@ -839,7 +853,9 @@ const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
                                             <td className="px-2 py-3"><input type="number" value={item.quantity} onChange={(e) => handleLineItemChange(item.id, 'quantity', Number(e.target.value))} className={getTableInputClass(false)} /></td>
                                             <td className="px-2 py-3">
                                                 <input list={`unit-options-${item.id}`} type="text" value={item.unit || 'Nos'} onChange={(e) => handleLineItemChange(item.id, 'unit', e.target.value)} className={getTableInputClass(false)} placeholder="Unit" />
-                                                <datalist id={`unit-options-${item.id}`}><option value="Nos" /><option value="Kgs" /><option value="Pcs" /><option value="Box" /><option value="Mtr" /><option value="Ltr" /><option value="Set" /><option value="Bag" /><option value="Doz" /></datalist>
+                                                <datalist id={`unit-options-${item.id}`}>
+                                                    {units.map((u) => <option key={u} value={u} />)}
+                                                </datalist>
                                             </td>
                                             <td className="px-2 py-3"><input type="number" value={item.rate} onChange={(e) => handleLineItemChange(item.id, 'rate', Number(e.target.value))} className={getTableInputClass(false)} /></td>
                                             <td className="px-2 py-3 font-mono font-medium"><input type="number" value={item.amount} onChange={(e) => handleLineItemChange(item.id, 'amount', Number(e.target.value))} className={getTableInputClass(hasError('lineItemMath', item.id))} /></td>

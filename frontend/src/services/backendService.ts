@@ -273,7 +273,8 @@ export const processBulkDocumentsWithAI = async (
 export const processBankStatementPDF = async (
   file: File,
   apiKey: string,
-  password?: string
+  password?: string,
+  signal?: AbortSignal
 ): Promise<{
   success: boolean;
   documentType: string;
@@ -297,7 +298,8 @@ export const processBankStatementPDF = async (
     const response = await fetch(`${BACKEND_API_URL}/ai/process-bank-statement-pdf`, {
       method: 'POST',
       headers,
-      body: formData
+      body: formData,
+      signal // Pass abort signal
     });
 
     const data = await response.json();
@@ -306,13 +308,18 @@ export const processBankStatementPDF = async (
     }
     return { success: true, status: response.status, ...data };
   } catch (error: any) {
+    // Check if aborted
+    if (error.name === 'AbortError') {
+      return { success: false, documentType: 'BANK_STATEMENT', message: 'Processing cancelled', status: 0 };
+    }
     return { success: false, documentType: 'BANK_STATEMENT', message: error.message, status: 500 };
   }
 };
 
 export const processBankStatement = async (
   file: File,
-  apiKey: string
+  apiKey: string,
+  signal?: AbortSignal
 ): Promise<{
   success: boolean;
   documentType: string;
@@ -333,7 +340,8 @@ export const processBankStatement = async (
     const response = await fetch(`${BACKEND_API_URL}/ai/process-bank-statement`, {
       method: 'POST',
       headers,
-      body: form
+      body: form,
+      signal // Pass abort signal
     });
 
     const data = await response.json();
@@ -342,6 +350,10 @@ export const processBankStatement = async (
     }
     return { success: true, status: response.status, ...data };
   } catch (error: any) {
+    // Check if aborted
+    if (error.name === 'AbortError') {
+      return { success: false, documentType: 'BANK_STATEMENT', message: 'Processing cancelled', status: 0 };
+    }
     return { success: false, documentType: 'BANK_STATEMENT', message: error.message, status: 500 };
   }
 };
