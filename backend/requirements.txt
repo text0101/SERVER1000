@@ -14,5 +14,5 @@ httpx==0.27.0
 # Only if strictly needed (opencv-python-headless is better for servers)
 opencv-python-headless==4.9.0.80
 # If you decide to use pdf2image later (requires poppler)
-
 pdf2image==1.17.0
+pypdf==3.17.0
