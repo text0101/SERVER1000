@@ -64,6 +64,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import shutil
+import pathlib
+import uuid
+import re
+from datetime import datetime
+
+# ============================================================
+# UPLOAD DIRECTORY SETUP
+# ============================================================
+UPLOAD_DIR = pathlib.Path(__file__).parent / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+print(f"[SUCCESS] Upload Directory: {UPLOAD_DIR.resolve()}")
+
+def save_upload_file(upload_file: UploadFile) -> str:
+    """
+    Saves the uploaded file to the local uploads directory.
+    Generated a unique filename to prevent overwrites.
+    Returns the saved filename.
+    """
+    try:
+        # Sanitize filename
+        original_name = pathlib.Path(upload_file.filename).name
+        
+        # Use UUID hex for uniqueness (as per final docs)
+        unique_id = uuid.uuid4().hex
+        
+        # Clean special chars from original name but keep extension
+        clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', original_name)
+        
+        # Construct new filename: uuid__original
+        # Truncate original if too long to avoid OS limits
+        if len(clean_name) > 50:
+            name_parts = os.path.splitext(clean_name)
+            clean_name = name_parts[0][:50] + name_parts[1]
+            
+        saved_filename = f"{unique_id}__{clean_name}"
+        destination_path = UPLOAD_DIR / saved_filename
+        
+        # Save file
+        with destination_path.open("wb") as buffer:
+            shutil.copyfileobj(upload_file.file, buffer)
+            
+        # IMPORTANT: Reset file pointer to beginning so subsequent readers (AI, PDF parsers) can read it
+        upload_file.file.seek(0)
+        
+        print(f"[AUTO-SAVE] Saved {original_name} to {destination_path}")
+        return str(saved_filename)
+        
+    except Exception as e:
+        print(f"[AUTO-SAVE ERROR] Failed to save {upload_file.filename}: {e}")
+        # Reset pointer just in case
+        upload_file.file.seek(0)
+        return ""
+
 # Simple API key validation
 VALID_API_KEYS = os.getenv("BACKEND_API_KEY", "").split(",")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -115,6 +169,52 @@ def save_token_usage(data: dict):
             json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Error saving token usage: {e}")
+
+# ============================================================
+# UPLOADED FILES MANAGEMENT ROUTES
+# ============================================================
+@app.get("/api/uploaded-files")
+async def list_uploaded_files(authorization: str = Header(None)):
+    """List all locally uploaded files"""
+    validate_api_key(authorization)
+    
+    files = []
+    if UPLOAD_DIR.exists():
+        # Sort by modification time desc
+        for f in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.is_file():
+                dt = datetime.fromtimestamp(f.stat().st_mtime)
+                files.append({
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "date": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": f.stat().st_mtime
+                })
+    
+    return {
+        "success": True, 
+        "files": files,
+        "count": len(files)
+    }
+
+@app.post("/api/open-uploads-folder")
+async def open_uploads_folder(authorization: str = Header(None)):
+    """Open the uploads folder in the OS file explorer"""
+    validate_api_key(authorization)
+    
+    try:
+        if os.name == 'nt':  # Windows
+            os.startfile(UPLOAD_DIR)
+        elif sys.platform == 'darwin':  # macOS
+            import subprocess
+            subprocess.run(['open', str(UPLOAD_DIR)])
+        else:  # Linux
+            import subprocess
+            subprocess.run(['xdg-open', str(UPLOAD_DIR)])
+            
+        return {"success": True, "message": "Folder opened"}
+    except Exception as e:
+        return {"success": False, "message": f"Failed to open folder: {str(e)}"}
 
 def track_token_usage(response) -> dict:
     """Track token usage from Gemini response and return updated stats"""
@@ -578,6 +678,9 @@ async def process_document(
 ):
     """Process a single document (invoice image/PDF) and return structured data"""
     validate_api_key(authorization)
+    
+    # Auto-save file
+    saved_path = save_upload_file(file)
 
     # Check token limit before processing
     limit_status = check_token_limit()
@@ -866,6 +969,9 @@ async def process_bulk(
     import base64, json
 
     for f in files:
+        # Auto-save file
+        save_upload_file(f)
+        
         try:
             file_bytes = await f.read()
             b64 = base64.b64encode(file_bytes).decode('utf-8')
@@ -1133,6 +1239,9 @@ async def process_bank_statement_pdf(
     """
     validate_api_key(authorization)
 
+    # Auto-save file
+    save_upload_file(file)
+
     if not GEMINI_API_KEY:
         raise HTTPException(500, "Gemini API key not configured")
 
@@ -1387,6 +1496,9 @@ async def process_bank_statement(
 ):
     """Process a single bank statement image (PNG/JPG)"""
     validate_api_key(authorization)
+
+    # Auto-save file
+    save_upload_file(file)
 
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API key not configured on server")

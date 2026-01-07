@@ -1,0 +1,61 @@
+{
+  "hash": "02390e54",
+  "configHash": "9c69e94b",
+  "lockfileHash": "d594b44f",
+  "browserHash": "89077f78",
+  "optimized": {
+    "@google/genai": {
+      "src": "../../node_modules/@google/genai/dist/web/index.mjs",
+      "file": "@google_genai.js",
+      "fileHash": "75309f59",
+      "needsInterop": false
+    },
+    "lucide-react": {
+      "src": "../../node_modules/lucide-react/dist/esm/lucide-react.js",
+      "file": "lucide-react.js",
+      "fileHash": "9f53a3ca",
+      "needsInterop": false
+    },
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "19653234",
+      "needsInterop": true
+    },
+    "react-dom": {
+      "src": "../../node_modules/react-dom/index.js",
+      "file": "react-dom.js",
+      "fileHash": "35da3d75",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "22a241d7",
+      "needsInterop": true
+    },
+    "uuid": {
+      "src": "../../node_modules/uuid/dist/index.js",
+      "file": "uuid.js",
+      "fileHash": "afda0627",
+      "needsInterop": false
+    },
+    "xlsx": {
+      "src": "../../node_modules/xlsx/xlsx.mjs",
+      "file": "xlsx.js",
+      "fileHash": "ba997a34",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-HQYTDYU2": {
+      "file": "chunk-HQYTDYU2.js"
+    },
+    "chunk-PAMVEWRW": {
+      "file": "chunk-PAMVEWRW.js"
+    },
+    "chunk-G3PMV62Z": {
+      "file": "chunk-G3PMV62Z.js"
+    }
+  }
+}

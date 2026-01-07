@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoTally AI - Tally Automation</title>
+  
+  <!-- PDF.js for rendering PDFs -->
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    // Configure PDF.js Worker
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+  
+  <!-- Minimal critical CSS to prevent FOUC -->
+  <style>
+    #root {
+      opacity: 0;
+      transition: opacity 0.2s ease-in;
+    }
+    #root.loaded {
+      opacity: 1;
+    }
+  </style>
+</head>
+
+
+
+<body class="m-0 p-0 w-full h-full overflow-hidden bg-slate-950 text-slate-100 font-sans antialiased">
+  <div id="root"></div>
+  <script type="module" src="/src/index.tsx"></script>
+</body>
+
+</html>
