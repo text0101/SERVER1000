@@ -1,53 +1,55 @@
-# Quick Setup Guide
+# AutoTallyAI Web Setup (Quick Start)
 
-## Step 1: Create .env file
+## Prerequisites
+- Node.js 18+ and npm
+- Git (optional)
+- Tally Prime on Windows (optional, for live push)
 
-In the `backend` folder, create a file named `.env` with this content:
+## 1) Install
+- Clone or copy this folder
+- In the project root:
+  - `npm install`
 
-```env
-# Backend API Keys
-BACKEND_API_KEY=test-backend-key-12345
-GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
-```
+## 2) Environment
+- Create a `.env` file in the project root and add as needed:
+  - `VITE_API_BASE_URL=https://server1000-63i8.onrender.com`
+  - `VITE_BACKEND_API_KEY=your-key` 
+  - `VITE_TALLY_API_URL=http://127.0.0.1:9000`
+- Notes:
+  - `VITE_API_BASE_URL` defaults to a hosted backend if not set
+  - `VITE_BACKEND_API_KEY` defaults to a test key if not set
+  - In development, Tally requests go via Vite proxy at `/tally`
 
-**Important:** Replace `YOUR_GEMINI_API_KEY_HERE` with your actual Google Gemini API key.
+## 3) Run (Web)
+- Start dev server: `npm run dev`
+- Open: `http://localhost:5173/`
+- Tally integration:
+  - Start Tally Prime and enable ODBC/XML on port `9000`
+  - The app will detect and show connection status
 
-## Step 2: Install Dependencies
+## 4) Build and Preview
+- Build: `npm run build`
+- Preview static build: `npm run preview`
 
-```bash
-cd backend
-pip install -r requirements.txt
-```
+## 5) Desktop (Optional)
+- Dev: `npm run electron:dev`
+- Windows installer: `npm run electron:dist`
 
-## Step 3: Run the Backend
+## 6) Upload & Push Flow
+- Upload invoices, bank statements, or Excel from Dashboard
+- Processed invoices show as `Ready`
+- Push:
+  - Single: open in editor and click `Push`
+  - Bulk: `Push All` when ready count > 0
 
-```bash
-python main.py
-```
+## Troubleshooting
+- Tally offline:
+  - Ensure Tally Prime is running on `127.0.0.1:9000`
+  - Set `VITE_TALLY_API_URL` or use the dev proxy `/tally`
+- Build errors:
+  - Delete `release_v*` artifacts if locked
+  - Re-run `npm install` then `npm run build`
+- Backend errors:
+  - Confirm `VITE_API_BASE_URL` is reachable
+  - Verify `VITE_BACKEND_API_KEY`
 
-The backend will start at `http://localhost:8000`
-
-## Step 4: Update React App
-
-Make sure your React app's `.env.local` has:
-
-```env
-VITE_BACKEND_API_URL=http://localhost:8000
-VITE_BACKEND_API_KEY=test-backend-key-12345
-```
-
-## Step 5: Test
-
-1. Start the backend: `python main.py`
-2. Start React: `npm run dev`
-3. Open `http://localhost:3000` in your browser
-4. Try the ChatBot or upload an invoice
-
-## Get Your Gemini API Key
-
-If you don't have a Gemini API key yet:
-
-1. Go to https://aistudio.google.com/app/apikey
-2. Sign in with your Google account
-3. Click "Create API Key"
-4. Copy the key and paste it in your `.env` file
