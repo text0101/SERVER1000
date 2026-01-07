@@ -42,3 +42,10 @@ release/
 release_v*/
 dist-electron/
 AutoTally-AI/
+.
+
+# Excluded Frontend (Backend-Only Repo)
+frontend/
+frontend/dist/
+frontend/node_modules/
+electron/
