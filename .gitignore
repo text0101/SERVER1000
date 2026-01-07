@@ -49,3 +49,5 @@ frontend/
 frontend/dist/
 frontend/node_modules/
 electron/
+.vite/
+
