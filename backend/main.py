@@ -1172,8 +1172,9 @@ async def process_bank_statement_pdf(
             print("✅ Bank Statement Decrypted Successfully")
             
         except Exception as e:
-            print(f"❌ Decryption Failed: {e}")
-            raise HTTPException(status_code=422, detail="Invalid password")
+            print(f"❌ pypdf Decryption Failed (likely compatibility issue): {e}")
+            print("⚠️ Continuing with original locked PDF using provided password...")
+            # Do NOT raise error here. Let pdfplumber/pdf2image try with the password.
     
     # Attempt Text Extraction first
     import io
@@ -1183,8 +1184,8 @@ async def process_bank_statement_pdf(
     extracted_text = ""
     
     try:
-        # Open with None password (already decrypted if needed)
-        with pdfplumber.open(io.BytesIO(pdf_bytes), password=None) as pdf:
+        # Use password if provided (it will be None if we successfully decrypted above)
+        with pdfplumber.open(io.BytesIO(pdf_bytes), password=password) as pdf:
             print(f"DEBUG: PDF Opened Successfully. Pages: {len(pdf.pages)}")
             for page in pdf.pages:
                 text = page.extract_text()
